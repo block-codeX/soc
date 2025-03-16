@@ -1,3 +1,5 @@
+
+
 use crate::db::Db;
 use crate::models::User;
 use futures::TryStreamExt;
@@ -28,9 +30,10 @@ pub async fn sign_up(user: Json<User>, db: &State<Db>) -> Json<String> {
     }
 }
 
+
 #[get("/users")]
-pub async fn read_user(db: &State<Db>) -> Json<Vec<User>> {
-    println!("hello");
+pub async fn read_users(db: &State<Db>) -> Json<Vec<User>> {
+    
     let mut cursor: Cursor<User> = db
         .find(None, FindOptions::default())
         .await
@@ -40,6 +43,29 @@ pub async fn read_user(db: &State<Db>) -> Json<Vec<User>> {
         users.push(user);
     }
     Json(users)
+}
+
+#[get("/user/<id>")]
+pub async  fn read_user(db: &State<Db>, id: &str) -> Result<Json<User>, Status> {
+    let collection = db;
+    let object_id = match ObjectId::parse_str(id) {
+        Ok(oid)=> oid,
+        Err(_) => return Err(Status::BadRequest),
+    };
+    let filter = doc! {"_id": object_id};
+    let result = collection.find_one(filter, None
+        
+    ).await;
+    match result {
+        Ok(fetched_data) => {
+            if let Some(data) = fetched_data {
+                Ok(Json(data))
+            }else {
+                Err(Status::NotFound)
+            }
+        }
+        Err(_) => Err(Status::InternalServerError)
+    }
 }
 
 #[delete("/user/<id>")]
@@ -65,6 +91,9 @@ pub async fn drop_user(id: &str, db: &State<Db>) -> Result<Json<String>, Status>
     }
 }
 
+
+
+
 #[put("/user/<id>", format = "json", data = "<updated_user>")]
 pub async fn update_user(
     id: &str,
@@ -77,22 +106,34 @@ pub async fn update_user(
         Err(_) => return Err(Status::BadRequest),
     };
 
-    let update_doc = doc! {
-        "$set": {
+    let mut update_doc = doc! {
+        
             "name": &updated_user.name,
             "email": &updated_user.email,
             "wallet": &updated_user.wallet,
-            "user_rank": updated_user.user_rank.map(|rank| Bson::Int32(rank as i32))
-        }
+    
     };
+    // only add user ranking if it is provided
+    if let Some(rank) = updated_user.user_rank {
+        update_doc.insert("user_rank", Bson::Int32(rank));
+    }
+    let updated_doc = doc! {  "$set":update_doc};
+    println!("{:?}",updated_doc);
     let filter = doc! {"_id": object_id};
 
     match collection
-        .find_one_and_update(filter, update_doc, None)
+        .find_one_and_update(filter, updated_doc, None)
         .await
     {
-        Ok(Some(update_user)) => Ok(Json("User succesfully updated".to_string())),
-        Ok(None) => Err(Status::NotFound),
-        Err(_) => Err(Status::InternalServerError),
+        Ok(Some(_)) => Ok(Json("User succesfully updated".to_string())),
+        Ok(None) => {
+            eprintln!("User not found: {}", id);
+            Err(Status::NotFound)
+        },
+        Err(e) => {
+            eprintln!("Database error: {:?}", e);
+            Err(Status::InternalServerError)},
     }
 }
+
+

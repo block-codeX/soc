@@ -14,9 +14,10 @@ async fn rocket() -> _ {
         "/api/v1",
         routes![
             routes::sign_up,
-            routes::read_user,
+            routes::read_users,
             routes::drop_user,
-            routes::update_user
+            routes::update_user,
+            routes::read_user
         ],
     )
 }

@@ -11,6 +11,6 @@ pub struct User {
     pub password: String,
     pub wallet: String,
 
-    #[serde(rename = "userRank", skip_serializing_if = "Option::is_none")]
-    pub user_rank: Option<u8>,
+    #[serde(rename = "user_rank", skip_serializing_if = "Option::is_none")]
+    pub user_rank: Option<i32>,
 }
