@@ -11,10 +11,12 @@ mod models;
 async fn rocket() -> _ {
     let user_db = db::connect::<models::User>().await;
     let event_db = db::connect::<models::Event>().await;
+    let application_db = db::connect::<models::Application>().await;
 
     rocket::build()
     .manage(user_db)
     .manage(event_db)
+    .manage(application_db)
     .mount(
         "/api/v1",
         routes![
@@ -27,7 +29,9 @@ async fn rocket() -> _ {
             routes::read_event,
             routes::read_events,
             routes::update_event,
-            routes::drop_event
+            routes::drop_event,
+            routes::apply_for_event,
+            routes::read_applicants
         ],
     )
 }

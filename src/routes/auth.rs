@@ -24,7 +24,7 @@ pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<Str
         user_rank: user.user_rank.or(Some(0)),
     };
     // println!("Inserting user: {:?}", new_user);
-    let result = db.insert_one(new_user, None).await;
+    let result = db.insert_one(new_user).await;
 
     match result {
         Ok(_) => Json("User registered successfully!".to_string()),
@@ -37,7 +37,7 @@ pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<Str
 pub async fn read_users(db: &State<Collection<User>>) -> Json<Vec<User>> {
     
     let mut cursor: Cursor<User> = db
-        .find(None, FindOptions::default())
+        .find( doc! {})
         .await
         .expect("Failed to find user");
     let mut users: Vec<User> = Vec::new();
@@ -55,7 +55,7 @@ pub async  fn read_user(db: &State<Collection<User>>, id: &str) -> Result<Json<U
         Err(_) => return Err(Status::BadRequest),
     };
     let filter = doc! {"_id": object_id};
-    let result = collection.find_one(filter, None
+    let result = collection.find_one(filter
         
     ).await;
     match result {
@@ -79,7 +79,7 @@ pub async fn drop_user(id: &str, db: &State<Collection<User>>) -> Result<Json<St
         Err(_) => return Err(Status::BadRequest),
     };
     let filter = doc! {"_id": object_id};
-    let result = collection.delete_one(filter, None).await;
+    let result = collection.delete_one(filter).await;
 
     match result {
         Ok(delete_result) => {
@@ -124,7 +124,7 @@ pub async fn update_user(
     let filter = doc! {"_id": object_id};
 
     match collection
-        .find_one_and_update(filter, updated_doc, None)
+        .find_one_and_update(filter, updated_doc)
         .await
     {
         Ok(Some(_)) => Ok(Json("User succesfully updated".to_string())),

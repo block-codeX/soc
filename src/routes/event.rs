@@ -19,7 +19,7 @@ pub async  fn create_event(new_event: Json<Event>, Database: &State<Collection<E
         event_type: new_event.event_type.clone(),
         description: new_event.description.clone()
     };
-    let result  = Database.insert_one(new_event, None).await;
+    let result  = Database.insert_one(new_event).await;
 
     match result {
         Ok(_) => Json("Event successfully created".to_string()),
@@ -35,7 +35,7 @@ pub async  fn read_event(db: &State<Collection<Event>>, event_id: &str) -> Resul
         Err(_) => return Err(Status::BadRequest)
     };
     let filter = doc! {"_id": object_id};
-    let result = collection.find_one(filter, None).await;
+    let result = collection.find_one(filter).await;
     eprintln!("loging...{:?}",result);
     match result {
         Ok(fetch_data) => {
@@ -52,7 +52,7 @@ pub async  fn read_event(db: &State<Collection<Event>>, event_id: &str) -> Resul
 #[get("/events")]
 pub async fn read_events(Database: &State<Collection<Event>>) -> Json<Vec<Event>> {
     let mut cursor :Cursor<Event> = Database
-        .find(None, FindOptions::default())
+        .find( doc! {})
         .await
         .expect("Failed to find evets");
     let mut events: Vec<Event> = Vec::new();
@@ -80,7 +80,7 @@ pub async fn update_event(
     let filter = doc! {"_id": event_id};
     
     match collection
-    .find_one_and_update(filter, update_doc, None).await {
+    .find_one_and_update(filter, update_doc).await {
         Ok(Some(_)) => Ok(Json("User successfully  updated".to_string())),
         Ok(None)=> {
             
@@ -102,7 +102,7 @@ pub async fn drop_event(event_id: &str, db: &State<Collection<Event>>) -> Result
         Err(_) => return Err(Status::BadRequest)
     };
     let filter = doc! {"_id": object_id};
-    let result = collection.delete_one(filter, None).await;
+    let result = collection.delete_one(filter).await;
 
     match result {
        Ok(deleted_result) => {
