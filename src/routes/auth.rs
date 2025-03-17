@@ -1,18 +1,20 @@
 
 
-use crate::db::Db;
-use crate::models::User;
+
+
 use futures::TryStreamExt;
 use mongodb::bson::oid::ObjectId;
 use mongodb::bson::{doc, Bson};
 use mongodb::options::FindOptions;
 use mongodb::Cursor;
+use mongodb::Collection;
 use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::{post, State};
+use crate::models::User;
 
 #[post("/user", format = "json", data = "<user>")]
-pub async fn sign_up(user: Json<User>, db: &State<Db>) -> Json<String> {
+pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<String> {
     let new_user = User {
         id: None,
         name: user.name.clone(),
@@ -21,7 +23,7 @@ pub async fn sign_up(user: Json<User>, db: &State<Db>) -> Json<String> {
         wallet: user.wallet.clone(),
         user_rank: user.user_rank.or(Some(0)),
     };
-    println!("Inserting user: {:?}", new_user);
+    // println!("Inserting user: {:?}", new_user);
     let result = db.insert_one(new_user, None).await;
 
     match result {
@@ -32,9 +34,9 @@ pub async fn sign_up(user: Json<User>, db: &State<Db>) -> Json<String> {
 
 
 #[get("/users")]
-pub async fn read_users(db: &State<Db>) -> Json<Vec<User>> {
+pub async fn read_users(Database: &State<Collection<User>>) -> Json<Vec<User>> {
     
-    let mut cursor: Cursor<User> = db
+    let mut cursor: Cursor<User> = Database
         .find(None, FindOptions::default())
         .await
         .expect("Failed to find user");
@@ -46,7 +48,7 @@ pub async fn read_users(db: &State<Db>) -> Json<Vec<User>> {
 }
 
 #[get("/user/<id>")]
-pub async  fn read_user(db: &State<Db>, id: &str) -> Result<Json<User>, Status> {
+pub async  fn read_user(db: &State<Collection<User>>, id: &str) -> Result<Json<User>, Status> {
     let collection = db;
     let object_id = match ObjectId::parse_str(id) {
         Ok(oid)=> oid,
@@ -69,7 +71,7 @@ pub async  fn read_user(db: &State<Db>, id: &str) -> Result<Json<User>, Status> 
 }
 
 #[delete("/user/<id>")]
-pub async fn drop_user(id: &str, db: &State<Db>) -> Result<Json<String>, Status> {
+pub async fn drop_user(id: &str, db: &State<Collection<User>>) -> Result<Json<String>, Status> {
     let collection = db;
 
     let object_id = match ObjectId::parse_str(id) {
@@ -98,7 +100,7 @@ pub async fn drop_user(id: &str, db: &State<Db>) -> Result<Json<String>, Status>
 pub async fn update_user(
     id: &str,
     updated_user: Json<User>,
-    db: &State<Db>,
+    db: &State<Collection<User>>,
 ) -> Result<Json<String>, Status> {
     let collection = db;
     let object_id = match ObjectId::parse_str(id) {
