@@ -34,9 +34,9 @@ pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<Str
 
 
 #[get("/users")]
-pub async fn read_users(Database: &State<Collection<User>>) -> Json<Vec<User>> {
+pub async fn read_users(db: &State<Collection<User>>) -> Json<Vec<User>> {
     
-    let mut cursor: Cursor<User> = Database
+    let mut cursor: Cursor<User> = db
         .find(None, FindOptions::default())
         .await
         .expect("Failed to find user");
@@ -120,7 +120,7 @@ pub async fn update_user(
         update_doc.insert("user_rank", Bson::Int32(rank));
     }
     let updated_doc = doc! {  "$set":update_doc};
-    println!("{:?}",updated_doc);
+    
     let filter = doc! {"_id": object_id};
 
     match collection

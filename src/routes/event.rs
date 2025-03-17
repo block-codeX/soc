@@ -1,3 +1,4 @@
+use crate::models::event::EventType;
 use crate::models::Event;
 use futures::TryStreamExt;
 use mongodb::Cursor;
@@ -8,15 +9,15 @@ use rocket::http::Status;
 #[post("/event", format="json", data="<new_event>")]
 pub async  fn create_event(new_event: Json<Event>, Database: &State<Collection<Event>>) -> Json<String> {
     // ensure the id is a valid obj
-    if new_event.user_id.to_hex().is_empty() {
-        return Json(Status::BadRequest.to_string());
-    }
+    
     let new_event = Event {
         id: None,
         name: new_event.name.clone(),
         location: new_event.location.clone(),
         date: new_event.date.clone(),
-        user_id: new_event.user_id
+        host_id: new_event.host_id,
+        event_type: new_event.event_type.clone(),
+        description: new_event.description.clone()
     };
     let result  = Database.insert_one(new_event, None).await;
 
@@ -68,25 +69,21 @@ pub async fn update_event(
     db: &State<Collection<Event>>
 ) -> Result<Json<String>, Status> {
     let collection = db;
-    let object_id = match ObjectId::parse_str(event_id) {
-        Ok(oid) => oid,
-        Err(_) => return Err(Status::BadRequest),
-    };
 
     let  update_doc = doc! {
         "$set" : {
             "name": &updated_event.name,
         "location": &updated_event.location,
         "date": &updated_event.date,
-        "user_id": updated_event.user_id
         }
     };
-    let filter = doc! {"_id": object_id};
-
+    let filter = doc! {"_id": event_id};
+    
     match collection
     .find_one_and_update(filter, update_doc, None).await {
         Ok(Some(_)) => Ok(Json("User successfully  updated".to_string())),
         Ok(None)=> {
+            
             Err(Status::NotFound)
         },
         Err(e)=> {
@@ -94,4 +91,27 @@ pub async fn update_event(
         }
     }
     
+}
+
+#[delete("/event/<event_id>")]
+pub async fn drop_event(event_id: &str, db: &State<Collection<Event>>) -> Result<Json<String>, Status> {
+    let collection = db;
+
+    let object_id = match ObjectId::parse_str(event_id) {
+        Ok(oid) => oid,
+        Err(_) => return Err(Status::BadRequest)
+    };
+    let filter = doc! {"_id": object_id};
+    let result = collection.delete_one(filter, None).await;
+
+    match result {
+       Ok(deleted_result) => {
+        if deleted_result.deleted_count > 0 {
+            Ok(Json("User deleted successfully".to_string()))
+        }else {
+            Err(Status::NotFound)
+        }
+       }
+       Err(_)=> Err(Status::InternalServerError)
+    }
 }

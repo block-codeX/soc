@@ -27,6 +27,7 @@ async fn rocket() -> _ {
             routes::read_event,
             routes::read_events,
             routes::update_event,
+            routes::drop_event
         ],
     )
 }
