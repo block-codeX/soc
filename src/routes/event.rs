@@ -86,7 +86,7 @@ pub async fn update_event(
             
             Err(Status::NotFound)
         },
-        Err(e)=> {
+        Err(_e)=> {
             Err(Status::InternalServerError)
         }
     }
