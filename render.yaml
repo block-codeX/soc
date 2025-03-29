@@ -1,0 +1,9 @@
+services:
+  - name: soc
+    type: web
+    env: rust
+    buildCommand: "cargo build --release"
+    startCommand: "./target/release/soc"
+    envVars:
+      - key: PORT
+        value: 8080

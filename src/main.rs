@@ -31,7 +31,7 @@ async fn rocket() -> _ {
             routes::update_event,
             routes::drop_event,
             routes::apply_for_event,
-            routes::read_applicants
+            routes::read_applicants,
         ],
     )
 }
