@@ -52,6 +52,7 @@ async fn rocket() -> _ {
             routes::drop_event,
             routes::apply_for_event,
             routes::read_applicants,
+            routes::update_user_rank
         ],
     )
 }

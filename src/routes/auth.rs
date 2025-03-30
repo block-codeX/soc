@@ -119,7 +119,8 @@ pub async fn update_user(
     if let Some(rank) = updated_user.user_rank {
         update_doc.insert("user_rank", Bson::Int32(rank));
     }
-    let updated_doc = doc! {  "$set":update_doc};
+    
+    let updated_doc = doc! {  "$set": Bson::Document(update_doc)};
     
     let filter = doc! {"_id": object_id};
 
@@ -139,3 +140,31 @@ pub async fn update_user(
 }
 
 
+#[put("/user/<id>/rank", format = "json", data = "<new_rank>")]
+pub async fn update_user_rank(
+    id: &str,
+    new_rank: Json<i32>,
+    db: &State<Collection<User>>,
+) -> Result<Json<String>, Status> {
+    let collection = db;
+
+    let object_id = match ObjectId::parse_str(id) {
+        Ok(oid) => oid,
+        Err(_) => return Err(Status::BadRequest)
+    };
+
+    let filter = doc! {"_id": object_id};
+    let update = doc! {"$set": {"user_rank": Bson::Int32(*new_rank)}};
+
+    match collection.find_one_and_update(filter, update).await {
+        Ok(Some(_)) => Ok(Json("User rank successfully updated".to_string())),
+        Ok(None) => {
+            eprintln!("User not found: {}", id);
+            Err(Status::NotFound)
+        },
+        Err(e) => {
+            eprintln!("Database error : {:?}", e);
+            Err(Status::InternalServerError)
+        }
+    }
+}
