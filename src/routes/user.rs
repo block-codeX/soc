@@ -1,7 +1,11 @@
+use std::time::SystemTime;
+
+use chrono::{format, Utc};
 use mongodb::Collection;
 use rocket::{serde::json::Json, State};
+use serde_json::Error;
 use crate::{models::{user, User}, routes::auth::AuthenticatedUser};
-use mongodb::bson::{doc, Bson, Uuid};
+use mongodb::bson::{doc, Bson, Uuid, DateTime as BsonDateTime};
 use mongodb::Cursor;
 use futures::TryStreamExt;
 use mongodb::bson::oid::ObjectId;
@@ -15,20 +19,29 @@ pub fn profile(user: AuthenticatedUser) -> Json<String> {
 
 #[post("/user", format = "json", data = "<user>")]
 pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<String> {
+    let filter = doc! {"email": &user.email};
+
+    if let Ok(Some(_)) = db.find_one(filter.clone()).await {
+        return Json("User already exist".to_string());
+    }
+    
     let hashed_password = match hash(&user.password, DEFAULT_COST) {
         Ok(hashed) => hashed,
         Err(_) => return Json("Error hashing password".to_string())
     };
-    let new_user = User {
-        id: None,
-        name: user.name.clone(),
-        email: user.email.clone(),
-        password: hashed_password,
-        wallet: user.wallet.clone(),
-        user_rank: user.user_rank.or(Some(0)),
+    let now= Utc::now();
+    let new_user = User {id:None,name:user.name.clone(),
+        email:user.email.clone(),
+        password:hashed_password,
+        wallet:user.wallet.clone(),
+        user_rank:user.user_rank.or(Some(0)), 
+        created_at: now, 
+        updated_at: now,
     };
+    
     // println!("Inserting user: {:?}", new_user);
     let result = db.insert_one(new_user).await;
+
 
     match result {
         Ok(_) => Json("User registered successfully!".to_string()),
@@ -37,7 +50,7 @@ pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<Str
 }
 
 #[get("/users")]
-pub async fn read_users(db: &State<Collection<User>>) -> Json<Vec<User>> {
+pub async fn read_users(db: &State<Collection<User>>, _user: AuthenticatedUser) -> Json<Vec<User>> {
     
     let mut cursor: Cursor<User> = db
         .find( doc! {})
@@ -46,12 +59,13 @@ pub async fn read_users(db: &State<Collection<User>>) -> Json<Vec<User>> {
     let mut users: Vec<User> = Vec::new();
     while let Some(user) = cursor.try_next().await.expect("Error iterating cursor") {
         users.push(user);
+        println!("{:?}",users);
     }
     Json(users)
 }
 
 #[get("/user/<id>")]
-pub async  fn read_user(db: &State<Collection<User>>, id: &str) -> Result<Json<User>, Status> {
+pub async  fn read_user(db: &State<Collection<User>>, id: &str, _user: AuthenticatedUser) -> Result<Json<User>, Status> {
     let collection = db;
     let object_id = match ObjectId::parse_str(id) {
         Ok(oid)=> oid,
@@ -74,7 +88,7 @@ pub async  fn read_user(db: &State<Collection<User>>, id: &str) -> Result<Json<U
 }
 
 #[delete("/user/<id>")]
-pub async fn drop_user(id: &str, db: &State<Collection<User>>) -> Result<Json<String>, Status> {
+pub async fn drop_user(id: &str, db: &State<Collection<User>>, _user: AuthenticatedUser) -> Result<Json<String>, Status> {
     let collection = db;
 
     let object_id = match ObjectId::parse_str(id) {
@@ -99,6 +113,7 @@ pub async fn drop_user(id: &str, db: &State<Collection<User>>) -> Result<Json<St
 
 #[put("/user/<id>", format = "json", data = "<updated_user>")]
 pub async fn update_user(
+    _user: AuthenticatedUser,
     id: &str,
     updated_user: Json<User>,
     db: &State<Collection<User>>,
@@ -114,6 +129,7 @@ pub async fn update_user(
             "name": &updated_user.name,
             "email": &updated_user.email,
             "wallet": &updated_user.wallet,
+            "updated_at": BsonDateTime::from(SystemTime::from(Utc::now())),
     
     };
     // only add user ranking if it is provided
@@ -146,6 +162,7 @@ pub async fn update_user_rank(
     id: &str,
     new_rank: Json<i32>,
     db: &State<Collection<User>>,
+    _user: AuthenticatedUser,
 ) -> Result<Json<String>, Status> {
     let collection = db;
 

@@ -1,10 +1,11 @@
 
-use std::env;
+use std::time::SystemTime;
+use std::{clone, env};
 
 
 use futures::TryStreamExt;
 use mongodb::bson::oid::ObjectId;
-use mongodb::bson::{doc, Bson, Uuid};
+use mongodb::bson::{doc, Bson, DateTime, Uuid, DateTime as BsonDateTime};
 use mongodb::options::FindOptions;
 use mongodb::Cursor;
 use mongodb::Collection;
@@ -24,7 +25,8 @@ use rocket::{post, State};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use lazy_static::lazy_static;
-use crate::models::User;
+use crate::db;
+use crate::models::{BlackListedToken, User};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -65,14 +67,22 @@ lazy_static! {
     static ref BLACKLIST: Mutex<Vec<String>> = Mutex::new(Vec::new());
 }
 
-fn blacklist_token(token: &str) {
-    let mut blacklist = BLACKLIST.lock().unwrap();
-    blacklist.push(token.to_string());
+pub async fn blacklist_token(
+    token: &str, 
+    db: &State<Collection<BlackListedToken>>) -> Result<(), mongodb::error::Error> {
+
+    let mut blacklist_token = BlackListedToken {
+        token: token.to_string(),
+        blacklist_at: BsonDateTime::from(SystemTime::from(Utc::now()))
+    };
+    db.insert_one(blacklist_token).await?;
+    Ok(())
 }
 
-fn is_blacklisted(token: &str) -> bool{
-    let blacklist = BLACKLIST.lock().unwrap();
-    blacklist.contains(&token.to_string())
+pub async fn is_blacklisted(token: &str, db: &State<Collection<BlackListedToken>>) -> Result<bool, mongodb::error::Error>{
+    let filter = doc! {"token": token};
+    let result  = db.find_one(filter).await?;
+    Ok(result.is_some())
 }
 
 // request guard for jwt
@@ -87,20 +97,32 @@ impl <'r> FromRequest<'r> for AuthenticatedUser {
     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
         let headers: &HeaderMap<'_> = req.headers();
         let auth_header = headers.get_one("Authorization");
-
+    
         if let Some(token) = auth_header {
             if let Some(jwt) = token.strip_prefix("Bearer ") {
-                if is_blacklisted(jwt) {
-                    return Outcome::Error((Status::Unauthorized, ()));
+                // Get the MongoDB collection from Rocket's managed state
+                let db = match req.rocket().state::<Collection<BlackListedToken>>() {
+                    Some(db) => db,
+                    None => return Outcome::Error((Status::InternalServerError, ())),
+                };
+    
+                // Check if the token is blacklisted
+                match is_blacklisted(jwt, db.into()).await {
+                    Ok(true) => return Outcome::Error((Status::Unauthorized, ())), // Token is blacklisted
+                    Ok(false) => (), // Token is valid
+                    Err(_) => return Outcome::Error((Status::InternalServerError, ())), // Database error
                 }
+    
+                // Validate the token
                 match validate_jwt(jwt) {
                     Ok(email) => return Outcome::Success(AuthenticatedUser { email }),
-                    Err(_) => return Outcome::Error((Status::Unauthorized, ()))
+                    Err(_) => return Outcome::Error((Status::Unauthorized, ())),
                 }
             }
         }
         Outcome::Error((Status::Unauthorized, ()))
     }
+    
 }
 
 fn generate_jwt(addr: &str, exp_seconds: usize) -> &'static str {
@@ -134,25 +156,37 @@ fn validate_jwt(token: &str) -> Result<String, jsonwebtoken::errors::Error> {
 }
 
 #[post("/auth/login", format="json", data = "<credentials>")]
-pub async fn login(credentials: Json<LoginRequest>) -> Result<Json<TokenResponse>, Status> {
+pub async fn login(
+    credentials: Json<LoginRequest>, 
+    db: &State<Collection<User>>) -> Result<Json<TokenResponse>, Status> {
     let email = credentials.email.clone();
     let password = credentials.password.clone();
+    let filter  = doc! {"email": &email};
+    // check if user exist
+    match db.find_one(filter.clone()).await {
+        Ok(Some(user)) => {
+            // verify password
+            if bcrypt::verify(password, &user.password).unwrap_or(false) {
+                let access_token = generate_jwt(&email, 2 * 60 * 60); // expires in 2 hours
+                let refresh_token = generate_jwt(&email, 7 * 24 * 60 * 60); // expire in 7 days
 
-    // User validation (replace with DB query)
-    if email == "admin" && password == "password" {
-        let access_token = generate_jwt(&email, 2 * 60 * 60); // expires in 2 hours
-        let refresh_token = generate_jwt(&email, 7 * 24 * 60 * 60);
-
-        // store refresh token (in-memory HashMap for demo)
-        REFRESH_TOKENS.lock().unwrap().insert(refresh_token.to_string(), email.clone());
-
-        Ok(Json(TokenResponse {
-            access_token: access_token.to_string(),
-            refresh_token: refresh_token.to_string()
-        }))
-    }else {
-        Err(Status::Unauthorized)
+                // store the refresh token (in-memory Hashmap for demo)
+                REFRESH_TOKENS
+                .lock()
+                .unwrap()
+                .insert(refresh_token.to_string(), email.clone());
+                Ok(Json(TokenResponse {
+                    access_token: access_token.to_string(),
+                    refresh_token: refresh_token.to_string()
+                }))
+            } else {
+                Err(Status::Unauthorized)
+            }
+        }
+        Ok(None) => Err(Status::NotFound),
+        Err(_)=> Err(Status::InternalServerError),
     }
+    
 }
 
 // refresh token endpoint (post/refresh)
