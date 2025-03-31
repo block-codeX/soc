@@ -1,16 +1,14 @@
 #[macro_use]
 extern crate rocket;
 
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+
 use models::user;
 use rocket::{custom, routes};
 mod db;
 mod routes;
 mod models;
 
-async fn index() -> impl Responder {
-    HttpResponse::Ok().body("Hello, Ninja!")
-}
+
 
 
 #[launch]
@@ -52,7 +50,9 @@ async fn rocket() -> _ {
             routes::drop_event,
             routes::apply_for_event,
             routes::read_applicants,
-            routes::update_user_rank
+            routes::update_user_rank,
+            routes::login,
+            routes::profile,
         ],
     )
 }

@@ -1,170 +1,229 @@
 
-
+use std::env;
 
 
 use futures::TryStreamExt;
 use mongodb::bson::oid::ObjectId;
-use mongodb::bson::{doc, Bson};
+use mongodb::bson::{doc, Bson, Uuid};
 use mongodb::options::FindOptions;
 use mongodb::Cursor;
 use mongodb::Collection;
-use rocket::http::Status;
+use rocket::http::{HeaderMap, Status};
 use rocket::serde::json::Json;
+use rocket::request::{self, Outcome, Request, FromRequest};
+use chrono::{Utc, Duration};
+use rand::Rng;
+use hmac::{Hmac};
+use dotenv::dotenv;
+use sha2::Sha256;
+use serde_json::json;
+use serde_json::value::Value;
+use serde::{Serialize, Deserialize};
+use jsonwebtoken::{encode, decode, Header, Algorithm, Validation, EncodingKey, DecodingKey};
 use rocket::{post, State};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use lazy_static::lazy_static;
 use crate::models::User;
 
-#[post("/user", format = "json", data = "<user>")]
-pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<String> {
-    let new_user = User {
-        id: None,
-        name: user.name.clone(),
-        email: user.email.clone(),
-        password: user.password.clone(),
-        wallet: user.wallet.clone(),
-        user_rank: user.user_rank.or(Some(0)),
-    };
-    // println!("Inserting user: {:?}", new_user);
-    let result = db.insert_one(new_user).await;
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    company: String,
+    exp: usize,
+    iat: usize,
+    iss: String,
+    nbf: usize,
+}
 
-    match result {
-        Ok(_) => Json("User registered successfully!".to_string()),
-        Err(e) => Json(format!("Error: {e}")),
-    }
+type HmacSha256 = Hmac<Sha256>;
+
+#[derive(Serialize)]
+struct TokenResponse {
+    access_token: String,
+    refresh_token: String
 }
 
 
-#[get("/users")]
-pub async fn read_users(db: &State<Collection<User>>) -> Json<Vec<User>> {
-    
-    let mut cursor: Cursor<User> = db
-        .find( doc! {})
-        .await
-        .expect("Failed to find user");
-    let mut users: Vec<User> = Vec::new();
-    while let Some(user) = cursor.try_next().await.expect("Error iterating cursor") {
-        users.push(user);
-    }
-    Json(users)
+#[derive(Deserialize)]
+struct  LoginRequest {
+    email: String,
+    password: String
 }
 
-#[get("/user/<id>")]
-pub async  fn read_user(db: &State<Collection<User>>, id: &str) -> Result<Json<User>, Status> {
-    let collection = db;
-    let object_id = match ObjectId::parse_str(id) {
-        Ok(oid)=> oid,
-        Err(_) => return Err(Status::BadRequest),
-    };
-    let filter = doc! {"_id": object_id};
-    let result = collection.find_one(filter
-        
-    ).await;
-    match result {
-        Ok(fetched_data) => {
-            if let Some(data) = fetched_data {
-                Ok(Json(data))
-            }else {
-                Err(Status::NotFound)
+lazy_static! {
+    static ref REFRESH_TOKENS: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct  RefreshRequest {
+    pub refresh_token: String,
+}
+
+// add token to blacklist
+lazy_static! {
+    static ref BLACKLIST: Mutex<Vec<String>> = Mutex::new(Vec::new());
+}
+
+fn blacklist_token(token: &str) {
+    let mut blacklist = BLACKLIST.lock().unwrap();
+    blacklist.push(token.to_string());
+}
+
+fn is_blacklisted(token: &str) -> bool{
+    let blacklist = BLACKLIST.lock().unwrap();
+    blacklist.contains(&token.to_string())
+}
+
+// request guard for jwt
+pub struct AuthenticatedUser {
+    pub email: String
+}
+
+#[rocket::async_trait]
+impl <'r> FromRequest<'r> for AuthenticatedUser {
+    type Error = ();
+
+    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        let headers: &HeaderMap<'_> = req.headers();
+        let auth_header = headers.get_one("Authorization");
+
+        if let Some(token) = auth_header {
+            if let Some(jwt) = token.strip_prefix("Bearer ") {
+                if is_blacklisted(jwt) {
+                    return Outcome::Error((Status::Unauthorized, ()));
+                }
+                match validate_jwt(jwt) {
+                    Ok(email) => return Outcome::Success(AuthenticatedUser { email }),
+                    Err(_) => return Outcome::Error((Status::Unauthorized, ()))
+                }
             }
         }
-        Err(_) => Err(Status::InternalServerError)
+        Outcome::Error((Status::Unauthorized, ()))
     }
 }
 
-#[delete("/user/<id>")]
-pub async fn drop_user(id: &str, db: &State<Collection<User>>) -> Result<Json<String>, Status> {
-    let collection = db;
-
-    let object_id = match ObjectId::parse_str(id) {
-        Ok(oid) => oid,
-        Err(_) => return Err(Status::BadRequest),
+fn generate_jwt(addr: &str, exp_seconds: usize) -> &'static str {
+    dotenv().ok();
+    let secret = env::var("SECRET_KEY").expect("Secret key not set");
+    let expiration = (Utc::now() + Duration::seconds(exp_seconds as i64)).timestamp(); // token valid for 2 hours
+    let current_time = Utc::now().timestamp() as usize;
+    let my_claim = Claims {
+        sub: addr.to_owned(),
+        company: "SOC".to_owned(),
+        exp: expiration as usize,
+        iat: current_time, // UNIX timestamp
+        iss: "CxL".to_owned(),
+        nbf: current_time
     };
-    let filter = doc! {"_id": object_id};
-    let result = collection.delete_one(filter).await;
+    let encoded = encode(&Header::default(), &my_claim, &EncodingKey::from_secret(secret.as_bytes())).expect("JWT encoding failed");
+    let static_encoded: &'static str = Box::leak(encoded.into_boxed_str());
+    static_encoded
+}
 
-    match result {
-        Ok(delete_result) => {
-            if delete_result.deleted_count > 0 {
-                Ok(Json("User deleted successfully!".to_string()))
-            } else {
-                Err(Status::NotFound)
-            }
-        }
-        Err(_) => Err(Status::InternalServerError),
+fn validate_jwt(token: &str) -> Result<String, jsonwebtoken::errors::Error> {
+    dotenv().ok();
+    let secret = env::var("SECRET_KEY").expect("Jwt must be set");
+
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default()
+    )?;
+    Ok(token_data.claims.sub)
+}
+
+#[post("/auth/login", format="json", data = "<credentials>")]
+pub async fn login(credentials: Json<LoginRequest>) -> Result<Json<TokenResponse>, Status> {
+    let email = credentials.email.clone();
+    let password = credentials.password.clone();
+
+    // User validation (replace with DB query)
+    if email == "admin" && password == "password" {
+        let access_token = generate_jwt(&email, 2 * 60 * 60); // expires in 2 hours
+        let refresh_token = generate_jwt(&email, 7 * 24 * 60 * 60);
+
+        // store refresh token (in-memory HashMap for demo)
+        REFRESH_TOKENS.lock().unwrap().insert(refresh_token.to_string(), email.clone());
+
+        Ok(Json(TokenResponse {
+            access_token: access_token.to_string(),
+            refresh_token: refresh_token.to_string()
+        }))
+    }else {
+        Err(Status::Unauthorized)
     }
 }
 
+// refresh token endpoint (post/refresh)
+#[post("/refresh", format = "json", data = "<refresh_request>")]
+pub fn refresh(refresh_request: Json<RefreshRequest>) -> Result<Json<TokenResponse>, Status> {
+    dotenv().ok();
+    let refresh_token = refresh_request.refresh_token.clone();
+    let secret_key = env::var("SECRET_KEY").expect("secret must be set");
+    let decoding_key: DecodingKey = DecodingKey::from_secret(secret_key.as_bytes());
 
+    match decode::<Claims>(&refresh_token, &decoding_key, &Validation::default()) {
+    Ok(token_data) => {
+        let email = token_data.claims.sub;
 
+        // Verify that the refresh token is still valid
+        if let Some(_) = REFRESH_TOKENS.lock().unwrap().get(&refresh_token) {
+            let new_access_token = generate_jwt(&email, 2 * 60 * 60); // grant new access for 2 hrs
 
-#[put("/user/<id>", format = "json", data = "<updated_user>")]
-pub async fn update_user(
-    id: &str,
-    updated_user: Json<User>,
-    db: &State<Collection<User>>,
-) -> Result<Json<String>, Status> {
-    let collection = db;
-    let object_id = match ObjectId::parse_str(id) {
-        Ok(oid) => oid,
-        Err(_) => return Err(Status::BadRequest),
-    };
-
-    let mut update_doc = doc! {
-        
-            "name": &updated_user.name,
-            "email": &updated_user.email,
-            "wallet": &updated_user.wallet,
-    
-    };
-    // only add user ranking if it is provided
-    if let Some(rank) = updated_user.user_rank {
-        update_doc.insert("user_rank", Bson::Int32(rank));
-    }
-    
-    let updated_doc = doc! {  "$set": Bson::Document(update_doc)};
-    
-    let filter = doc! {"_id": object_id};
-
-    match collection
-        .find_one_and_update(filter, updated_doc)
-        .await
-    {
-        Ok(Some(_)) => Ok(Json("User succesfully updated".to_string())),
-        Ok(None) => {
-            eprintln!("User not found: {}", id);
-            Err(Status::NotFound)
-        },
-        Err(e) => {
-            eprintln!("Database error: {:?}", e);
-            Err(Status::InternalServerError)},
-    }
-}
-
-
-#[put("/user/<id>/rank", format = "json", data = "<new_rank>")]
-pub async fn update_user_rank(
-    id: &str,
-    new_rank: Json<i32>,
-    db: &State<Collection<User>>,
-) -> Result<Json<String>, Status> {
-    let collection = db;
-
-    let object_id = match ObjectId::parse_str(id) {
-        Ok(oid) => oid,
-        Err(_) => return Err(Status::BadRequest)
-    };
-
-    let filter = doc! {"_id": object_id};
-    let update = doc! {"$set": {"user_rank": Bson::Int32(*new_rank)}};
-
-    match collection.find_one_and_update(filter, update).await {
-        Ok(Some(_)) => Ok(Json("User rank successfully updated".to_string())),
-        Ok(None) => {
-            eprintln!("User not found: {}", id);
-            Err(Status::NotFound)
-        },
-        Err(e) => {
-            eprintln!("Database error : {:?}", e);
-            Err(Status::InternalServerError)
+            Ok(Json(TokenResponse {
+                access_token: new_access_token.to_string(),
+                refresh_token
+            }))
+        }else {
+            Err(Status::Unauthorized)
         }
     }
+    Err(_) => Err(Status::Unauthorized),
+    }
+    
 }
+
+// Logout endpoint (POST /logout)
+#[post("/logout", format = "json", data = "<refresh_token>")]
+pub fn loqout(refresh_token: Json<String>) -> Status {
+    let mut token_store = REFRESH_TOKENS.lock().unwrap();
+    if token_store.remove(&refresh_token.0).is_some(){
+        Status::Ok
+    }else {
+        Status::Unauthorized
+    }
+}
+
+
+
+// struct ApiKey<'r>(&'r str);
+
+// #[derive(Debug)]
+// enum ApiKeyError {
+//     Missing,
+//     Invalid,
+// }
+
+// #[rocket::async_trait]
+// impl<'r> FromRequest<'r> for ApiKey<'r> {
+//     type Error = ApiKeyError;
+
+//     async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+//         /// return true if key is a valid api key
+//         fn is_valid(key: &str) -> bool {
+//             key == "valid_api_key"
+//         }
+
+//         match req.headers().get_one("x-api-key") {
+//             None => Outcome::Error((Status::BadRequest, ApiKeyError::Missing)),
+//             Some(key) if is_valid(key) => Outcome::Success(ApiKey(key)),
+//             Some(_) => Outcome::Error((Status::BadRequest, ApiKeyError::Invalid)),
+//         }
+//     }
+// }
+
+// #[get("/sensitive")]
+// pub fn sensitive(key: ApiKey<'_>) -> &'static str {
+//     "Sensitive data"
+// }
