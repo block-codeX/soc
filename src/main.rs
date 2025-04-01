@@ -4,6 +4,7 @@ extern crate rocket;
 
 use models::user;
 use rocket::{custom, routes};
+use rocket_cors::{AllowedOrigins, CorsOptions};
 mod db;
 mod routes;
 mod models;
@@ -23,7 +24,11 @@ async fn rocket() -> _ {
     .unwrap_or_else(|_| "8000".to_string() )
     .parse::<u16>()
     .expect("Invalid PORT number");
-
+    
+    let cors = CorsOptions::default()
+        .allowed_origins(AllowedOrigins::all())
+        .to_cors()
+        .unwraps();
     
 
     rocket::custom(
@@ -33,6 +38,7 @@ async fn rocket() -> _ {
             ..rocket::Config::default()
         }
     )
+    .attach(cors) // Attach CORS Middleware
     .manage(user_db)
     .manage(event_db)
     .manage(application_db)
