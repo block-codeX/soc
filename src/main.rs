@@ -28,7 +28,7 @@ async fn rocket() -> _ {
     let cors = CorsOptions::default()
         .allowed_origins(AllowedOrigins::all())
         .to_cors()
-        .unwraps();
+        .unwrap();
     
 
     rocket::custom(
