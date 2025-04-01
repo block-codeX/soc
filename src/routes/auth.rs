@@ -4,12 +4,14 @@ use std::{clone, env};
 
 
 use futures::TryStreamExt;
+use hmac::digest::consts::False;
 use mongodb::bson::oid::ObjectId;
 use mongodb::bson::{doc, Bson, DateTime, Uuid, DateTime as BsonDateTime};
 use mongodb::options::FindOptions;
 use mongodb::Cursor;
 use mongodb::Collection;
 use rocket::http::{HeaderMap, Status};
+use rocket::response::status;
 use rocket::serde::json::Json;
 use rocket::request::{self, Outcome, Request, FromRequest};
 use chrono::{Utc, Duration};
@@ -27,6 +29,9 @@ use std::sync::Mutex;
 use lazy_static::lazy_static;
 use crate::db;
 use crate::models::{BlackListedToken, User};
+
+
+const RANK: Option<i32> = Some(1);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -125,6 +130,80 @@ impl <'r> FromRequest<'r> for AuthenticatedUser {
     
 }
 
+#[derive(Debug)]
+pub struct AuthToken(pub String);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for AuthToken {
+    type Error = ();
+
+    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        let headers = req.headers();
+        let auth_header = headers.get_one("Authorization");
+
+        if let Some(token) = auth_header {
+            if let Some(jwt) = token.strip_prefix("Bearer ") {
+                // get the mongoDB collection from rocket's state
+                let db = match req.rocket().state::<Collection<BlackListedToken>>() {
+                    Some(db) => db,
+                    None => return Outcome::Error((Status::InternalServerError, ())),
+                };
+
+                match validate_token(jwt, db.into()).await {
+                    Ok(true) => Outcome::Success(AuthToken(jwt.to_string())), // token is valid
+                    Ok(false) => Outcome::Error((Status::Unauthorized, ())),
+                    Err(status) => Outcome::Error((status, ())), // unauthorized token
+                }
+
+            }else {
+                Outcome::Error((Status::Unauthorized, ()))
+            }
+        }else {
+            Outcome::Error((Status::Unauthorized, ()))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AdminUser {
+    pub email: String,
+}
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for AdminUser {
+    type Error = ();
+
+    async fn from_request(req: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        let user_db = match req.rocket().state::<Collection<User>>() {
+            Some(user_db) => user_db,
+            None => return Outcome::Error((Status::InternalServerError, ())),
+        };
+
+        // Extract JWT token from Authorization header
+        let auth_header = req.headers().get_one("Authorization");
+        let token = match auth_header.and_then(|h| h.strip_prefix("Bearer ")) {
+            Some(t) => t,
+            None => return Outcome::Error((Status::Unauthorized, ())),
+        };
+
+        // Decode JWT to extract email
+        let email = match validate_jwt(token) {
+            Ok(email) => email,
+            Err(_) => return Outcome::Error((Status::Unauthorized, ())),
+        };
+
+        // Fetch user from MongoDB and check ranking
+        let filter = doc! { "email": &email };
+        match user_db.find_one(filter).await {
+            Ok(Some(user)) if user.user_rank == RANK => {
+                Outcome::Success(AdminUser { email })
+            }
+            _ => Outcome::Error((Status::Forbidden, ())), // User is not an admin or does not exist
+        }
+    }
+}
+
+
 fn generate_jwt(addr: &str, exp_seconds: usize) -> &'static str {
     dotenv().ok();
     let secret = env::var("SECRET_KEY").expect("Secret key not set");
@@ -219,16 +298,22 @@ pub fn refresh(refresh_request: Json<RefreshRequest>) -> Result<Json<TokenRespon
 }
 
 // Logout endpoint (POST /logout)
-#[post("/logout", format = "json", data = "<refresh_token>")]
-pub fn loqout(refresh_token: Json<String>) -> Status {
-    let mut token_store = REFRESH_TOKENS.lock().unwrap();
-    if token_store.remove(&refresh_token.0).is_some(){
-        Status::Ok
-    }else {
-        Status::Unauthorized
+#[post("/auth/logout", format = "json", data = "<token>")]
+pub async fn loqout(token: String, db: &State<Collection<BlackListedToken>>) -> Result<Json<String>, Status> {
+    match blacklist_token(&token, db).await {
+        Ok(_) => Ok(Json("Token blacklisted successfully!".to_string())),
+        Err(_) => Err(Status::InternalServerError)
     }
 }
 
+// before processing requests check if token is blacklisted?
+pub  async fn validate_token(token: &str, db: &State<Collection<BlackListedToken>>) -> Result<bool, Status> {
+    match is_blacklisted(token, db).await {
+        Ok(true) => Err(Status::Unauthorized), // token is blacklisted
+        Ok(false) => Ok(true),
+        Err(_) => Err(Status::InternalServerError)
+    }
+}
 
 
 // struct ApiKey<'r>(&'r str);

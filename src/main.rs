@@ -17,6 +17,7 @@ async fn rocket() -> _ {
     let user_db = db::connect::<models::User>().await;
     let event_db = db::connect::<models::Event>().await;
     let application_db = db::connect::<models::Application>().await;
+    let blacklisted_tokens_db = db::connect::<models::BlackListedToken>().await;
 
     let port = env::var("PORT")
     .unwrap_or_else(|_| "8000".to_string() )
@@ -35,6 +36,7 @@ async fn rocket() -> _ {
     .manage(user_db)
     .manage(event_db)
     .manage(application_db)
+    .manage(blacklisted_tokens_db)
     .mount(
         "/api/v1",
         routes![
@@ -53,6 +55,8 @@ async fn rocket() -> _ {
             routes::update_user_rank,
             routes::login,
             routes::profile,
+            routes::join_event,
+            routes::leave_event,
         ],
     )
 }

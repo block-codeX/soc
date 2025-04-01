@@ -1,6 +1,9 @@
 use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
 
+use super::Attendee;
+
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum EventType {
@@ -26,5 +29,8 @@ pub struct Event {
 
 
     #[serde(rename = "host_id", skip_serializing_if = "Option::is_none")]
-    pub host_id: Option<ObjectId>
+    pub host_id: Option<ObjectId>,
+
+    #[serde(default)]
+    pub attendees: Vec<Attendee>,
 }

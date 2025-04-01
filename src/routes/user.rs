@@ -4,13 +4,15 @@ use chrono::{format, Utc};
 use mongodb::Collection;
 use rocket::{serde::json::Json, State};
 use serde_json::Error;
-use crate::{models::{user, User}, routes::auth::AuthenticatedUser};
+use crate::{models::{user, BlackListedToken, User}, routes::auth::AuthenticatedUser};
 use mongodb::bson::{doc, Bson, Uuid, DateTime as BsonDateTime};
 use mongodb::Cursor;
 use futures::TryStreamExt;
 use mongodb::bson::oid::ObjectId;
 use rocket::http::{HeaderMap, Status};
 use bcrypt::{hash, DEFAULT_COST};
+
+use super::auth::{validate_token, AuthToken};
 
 #[get("/profile")]
 pub fn profile(user: AuthenticatedUser) -> Json<String> {
@@ -19,6 +21,7 @@ pub fn profile(user: AuthenticatedUser) -> Json<String> {
 
 #[post("/user", format = "json", data = "<user>")]
 pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<String> {
+    
     let filter = doc! {"email": &user.email};
 
     if let Ok(Some(_)) = db.find_one(filter.clone()).await {
@@ -50,8 +53,11 @@ pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<Str
 }
 
 #[get("/users")]
-pub async fn read_users(db: &State<Collection<User>>, _user: AuthenticatedUser) -> Json<Vec<User>> {
-    
+pub async fn read_users(db: &State<Collection<User>>,
+     _user: AuthenticatedUser,
+     _token: AuthToken,
+    //  db_blacklist: &State<Collection<BlackListedToken>>
+    ) -> Json<Vec<User>> {
     let mut cursor: Cursor<User> = db
         .find( doc! {})
         .await
@@ -59,13 +65,15 @@ pub async fn read_users(db: &State<Collection<User>>, _user: AuthenticatedUser) 
     let mut users: Vec<User> = Vec::new();
     while let Some(user) = cursor.try_next().await.expect("Error iterating cursor") {
         users.push(user);
-        println!("{:?}",users);
     }
     Json(users)
 }
 
 #[get("/user/<id>")]
-pub async  fn read_user(db: &State<Collection<User>>, id: &str, _user: AuthenticatedUser) -> Result<Json<User>, Status> {
+pub async  fn read_user(db: &State<Collection<User>>,
+     id: &str, 
+     _token: AuthToken,
+     _user: AuthenticatedUser) -> Result<Json<User>, Status> {
     let collection = db;
     let object_id = match ObjectId::parse_str(id) {
         Ok(oid)=> oid,
@@ -88,7 +96,10 @@ pub async  fn read_user(db: &State<Collection<User>>, id: &str, _user: Authentic
 }
 
 #[delete("/user/<id>")]
-pub async fn drop_user(id: &str, db: &State<Collection<User>>, _user: AuthenticatedUser) -> Result<Json<String>, Status> {
+pub async fn drop_user(id: &str, 
+    db: &State<Collection<User>>,
+    _token: AuthToken,
+     _user: AuthenticatedUser) -> Result<Json<String>, Status> {
     let collection = db;
 
     let object_id = match ObjectId::parse_str(id) {
@@ -116,6 +127,7 @@ pub async fn update_user(
     _user: AuthenticatedUser,
     id: &str,
     updated_user: Json<User>,
+    _token: AuthToken,
     db: &State<Collection<User>>,
 ) -> Result<Json<String>, Status> {
     let collection = db;
@@ -162,6 +174,7 @@ pub async fn update_user_rank(
     id: &str,
     new_rank: Json<i32>,
     db: &State<Collection<User>>,
+    _token: AuthToken,
     _user: AuthenticatedUser,
 ) -> Result<Json<String>, Status> {
     let collection = db;
