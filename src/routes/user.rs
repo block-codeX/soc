@@ -2,7 +2,7 @@ use std::time::SystemTime;
 
 use chrono::{format, Utc};
 use mongodb::Collection;
-use rocket::{serde::json::Json, State};
+use rocket::{response::status, serde::json::Json, State};
 use serde_json::Error;
 use crate::{models::{user, BlackListedToken, User}, routes::auth::AuthenticatedUser};
 use mongodb::bson::{doc, Bson, Uuid, DateTime as BsonDateTime};
@@ -15,8 +15,14 @@ use bcrypt::{hash, DEFAULT_COST};
 use super::auth::{validate_token, AuthToken};
 
 #[get("/profile")]
-pub fn profile(user: AuthenticatedUser) -> Json<String> {
-    Json(format!("welcome, {}", user.email))
+pub async fn profile(user: AuthenticatedUser, db: &State<Collection<User>>) -> Result<Json<User>, status::Custom<String>> {
+    let result = db.find_one(doc! {"email": &user.email}).await;
+
+    match result {
+        Ok(Some(user_data)) => Ok(Json(user_data)),
+        Ok(None) => Err(status::Custom(Status::NotFound, "User not found".to_string())), // if no user found
+        Err(e) => Err(status::Custom(Status::InternalServerError, format!("Database error: {}", e)))
+    }
 }
 
 #[post("/user", format = "json", data = "<user>")]

@@ -9,6 +9,7 @@ pub struct User {
     pub id: Option<ObjectId>,
     pub name: String,
     pub email: String,
+    #[serde(skip_serializing)]
     pub password: String,
     pub wallet: String,
 
