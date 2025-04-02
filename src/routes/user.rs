@@ -3,7 +3,6 @@ use std::time::SystemTime;
 use chrono::{format, Utc};
 use mongodb::Collection;
 use rocket::{response::status, serde::json::Json, State};
-use serde_json::Error;
 use crate::{models::{user, BlackListedToken, User}, routes::auth::AuthenticatedUser};
 use mongodb::bson::{doc, Bson, Uuid, DateTime as BsonDateTime};
 use mongodb::Cursor;
