@@ -20,17 +20,17 @@ pub fn profile(user: AuthenticatedUser) -> Json<String> {
 }
 
 #[post("/user", format = "json", data = "<user>")]
-pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<String> {
+pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Result< Json<String> ,rocket::response::status::Custom<String>> {
     
     let filter = doc! {"email": &user.email};
 
     if let Ok(Some(_)) = db.find_one(filter.clone()).await {
-        return Json("User already exist".to_string());
+        return Err(rocket::response::status::Custom(Status::Conflict, "User already exist".to_string()));
     }
     
     let hashed_password = match hash(&user.password, DEFAULT_COST) {
         Ok(hashed) => hashed,
-        Err(_) => return Json("Error hashing password".to_string())
+        Err(_) => return Err(rocket::response::status::Custom(Status::Conflict, "Error hashing password".to_string())),
     };
     let now= Utc::now();
     let new_user = User {id:None,name:user.name.clone(),
@@ -47,8 +47,8 @@ pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Json<Str
 
 
     match result {
-        Ok(_) => Json("User registered successfully!".to_string()),
-        Err(e) => Json(format!("Error: {e}")),
+        Ok(_) => Ok(Json("User registered successfully!".to_string())),
+        Err(e) => Err(rocket::response::status::Custom(Status::BadRequest, format!("Error: {e}"))),
     }
 }
 
