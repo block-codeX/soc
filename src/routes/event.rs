@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use crate::models::event::EventType;
 use crate::models::{Attendee, Event, User};
 use futures::{StreamExt, TryStreamExt};
-use mongodb::Cursor;
+use mongodb::change_stream::{event, session};
+use mongodb::{Client, Cursor};
 use mongodb::{bson::{doc, oid::{self, ObjectId}}, options::FindOptions, Collection};
 use rocket::{post, serde::json::Json, State};
 use rocket::http::Status;
@@ -29,34 +32,58 @@ struct EventRequest {
     event_type: EventType
 }
 
-#[post("/event", format="json", data="<new_event>")]
-pub async  fn create_event(new_event: Json<EventRequest>,
-     Database: &State<Collection<Event>>,
-     _admin: AdminUser, // only admin can call this
-    _token: AuthToken, // verfiy blacklisted tokens
-    _user: AuthenticatedUser // verity authenticated user
-    ) -> Json<String> {
-    // ensure the id is a valid obj
+#[post("/event", format = "json", data = "<new_event>")]
+pub async fn create_event(
+    new_event: Json<EventRequest>,
+    database: &State<Collection<Event>>,
+    _admin: AdminUser, // only admin can call this
+    _token: AuthToken,  // verify blacklisted tokens
+    _user: AuthenticatedUser, // verify authenticated user
+) -> Json<String> {
+    // Ensure the id is a valid object (if needed)
     
-    let new_event = Event {
-        id: None,
-        name: new_event.name.clone(),
-        location: new_event.location.clone(),
-        date: new_event.date.clone(),
-        host_id: new_event.host_id,
-        event_type: new_event.event_type.clone(),
-        description: new_event.description.clone(),
-        attendees: vec![],
-        image_url: Some("".to_string()),
-        pinned: PINNED_EVENT
-    };
-    let result  = Database.insert_one(new_event).await;
+    // Check if an event with the same name and location already exists
+    let existing_event = database
+        .find_one(
+            doc! {
+                "name": &new_event.name,
+                "location": &new_event.location
+            },
+            
+        )
+        .await;
 
-    match result {
-        Ok(_) => Json("Event successfully created".to_string()),
-        Err(_) => Json(Status::InternalServerError.to_string())
+    match existing_event {
+        // If an event with the same name and location is found, return an error message
+        Ok(Some(_)) => Json("Event with the same name and location already exists.".to_string()),
+        
+        // If no such event exists, proceed with creating the new event
+        Ok(None) => {
+            let new_event = Event {
+                id: None,
+                name: new_event.name.clone(),
+                location: new_event.location.clone(),
+                date: new_event.date.clone(),
+                host_id: new_event.host_id,
+                event_type: new_event.event_type.clone(),
+                description: new_event.description.clone(),
+                attendees: vec![],
+                image_url: Some("".to_string()),
+                pinned: PINNED_EVENT,
+            };
+
+            let result = database.insert_one(new_event).await;
+
+            match result {
+                Ok(_) => Json("Event successfully created".to_string()),
+                Err(_) => Json("Failed to create event".to_string()),
+            }
+        }
+        // Handle the case where the `find_one` operation itself fails
+        Err(_) => Json("Error checking for existing events.".to_string()),
     }
 }
+
 
 #[get("/event/<event_id>")]
 pub async  fn read_event(db: &State<Collection<Event>>, 
@@ -313,4 +340,126 @@ pub async fn get_multiple_events(
     }
 
     Ok(Json(events))
+}
+
+#[derive(Deserialize)]
+struct UpdatePinnedRequest {
+    pinned: bool
+}
+
+#[put("/events/<event_id>/pinned", format = "json", data = "<pinned_update>")]
+pub async fn update_pinned(
+    event_id: String,
+    pinned_update: Json<UpdatePinnedRequest>,
+    db: &State<Collection<Event>>, // Directly take Collection<Event> from state
+) -> Result<Json<&'static str>, rocket::response::status::Custom<String>> {
+    let event_id = match ObjectId::parse_str(&event_id) {
+        Ok(id) => id,
+        Err(_) => return Err(rocket::response::status::Custom(
+            rocket::http::Status::BadRequest,
+            "Invalid Event ID".to_string(),
+        )),
+    };
+
+    // Start an atomic update (if transactions are enabled in MongoDB)
+    let session = db.client().start_session().await.ok();
+
+    if let Some(mut session) = session {
+        session.start_transaction().await.ok();
+
+        // Step 1: Unpin all other events
+        let unpin_result = db
+            .update_many(doc! { "pinned": true }, doc! { "$set": { "pinned": false } })
+            .await;
+
+        if let Err(err) = unpin_result {
+            session.abort_transaction().await.ok();
+            return Err(rocket::response::status::Custom(
+                rocket::http::Status::InternalServerError,
+                format!("Error unpinning other events: {}", err),
+            ));
+        }
+
+        // Step 2: Pin the target event
+        let pin_result = db
+            .update_one(
+                doc! { "_id": event_id },
+                doc! { "$set": { "pinned": pinned_update.pinned } }
+            )
+            .await;
+
+        match pin_result {
+            Ok(res) => {
+                if res.matched_count == 0 {
+                    session.abort_transaction().await.ok();
+                    return Err(rocket::response::status::Custom(
+                        rocket::http::Status::NotFound,
+                        "Event not found".to_string(),
+                    ));
+                }
+
+                session.commit_transaction().await.ok();
+                Ok(Json("Pinned status updated successfully"))
+            }
+            Err(err) => {
+                session.abort_transaction().await.ok();
+                Err(rocket::response::status::Custom(
+                    rocket::http::Status::InternalServerError,
+                    format!("Database error: {}", err),
+                ))
+            }
+        }
+    } else {
+        // If transactions are not available, perform sequential updates
+        db.update_many(doc! { "pinned": true }, doc! { "$set": { "pinned": false } })
+            .await
+            .ok();
+
+        let update_result = db
+            .update_one(
+                doc! { "_id": event_id },
+                doc! { "$set": { "pinned": pinned_update.pinned } },
+            )
+            .await;
+
+        match update_result {
+            Ok(res) => {
+                if res.matched_count == 0 {
+                    Err(rocket::response::status::Custom(
+                        rocket::http::Status::NotFound,
+                        "Event not found".to_string(),
+                    ))
+                } else {
+                    Ok(Json("Pinned status updated successfully"))
+                }
+            }
+            Err(err) => Err(rocket::response::status::Custom(
+                rocket::http::Status::InternalServerError,
+                format!("Database error: {}", err),
+            )),
+        }
+    }
+}
+
+
+#[delete("/events")]
+pub async fn delete_all_events(
+    database: &State<Collection<Event>>,
+    _admin: AdminUser, // only admin can call this
+    _token: AuthToken,  // verify blacklisted tokens
+    _user: AuthenticatedUser, // verify authenticated user
+) -> Json<String> {
+    // Delete all events in the collection
+    let result = database.delete_many(doc! {},).await;
+
+    match result {
+        Ok(delete_result) => {
+            if delete_result.deleted_count > 0 {
+                Json("All events successfully deleted.".to_string())
+            } else {
+                Json("No events were found to delete.".to_string())
+            }
+        }
+        Err(_) => Json("Failed to delete events.".to_string()),
+    }
 }

@@ -3,7 +3,7 @@ extern crate rocket;
 
 
 use models::user;
-use rocket::{custom, routes};
+use rocket::{custom, route, routes};
 use rocket_cors::{AllowedOrigins, CorsOptions};
 mod db;
 mod routes;
@@ -64,6 +64,8 @@ async fn rocket() -> _ {
             routes::join_event,
             routes::leave_event,
             routes::get_multiple_events,
+            routes::update_pinned,
+            routes::delete_all_events,
         ],
     )
 }
