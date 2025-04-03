@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use chrono::{format, DateTime, Utc};
 use mongodb::Collection;
 use rocket::{response::status, serde::json::Json, State};
-use crate::{models::{user, BlackListedToken, User}, routes::auth::AuthenticatedUser};
+use crate::{models::{user::{self, UserType}, BlackListedToken, User}, routes::auth::AuthenticatedUser};
 use mongodb::bson::{doc, Bson, Uuid, DateTime as BsonDateTime};
 use mongodb::Cursor;
 use futures::TryStreamExt;
@@ -17,11 +17,22 @@ use super::auth::{validate_token, AdminUser, AuthToken};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Profile {
-    id: Option<ObjectId>,
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
     pub name: String,
     pub email: String,
+    pub tel: String,
     pub wallet: String,
     pub admin: Option<bool>,
+    pub user_type: UserType,
+    pub role: String,
+    pub stack: Vec<String>,
+    pub graduate: bool,
+    pub level: i32,
+    pub department: String,
+    pub university: String,
+    pub student: String,
+
     pub attending_events: Vec<ObjectId>,
     #[serde(with = "chrono::serde::ts_seconds", default = "default_datetime")] // Serialize & Deserialize timestamps properly
     pub created_at: DateTime<Utc>,
@@ -49,7 +60,16 @@ pub async fn profile(user: AuthenticatedUser, db: &State<Collection<User>>) -> R
                 admin: user_data.admin,
                 attending_events: user_data.attending_events,
                 created_at: user_data.created_at,
-                updated_at: user_data.updated_at
+                updated_at: user_data.updated_at,
+                tel: user_data.tel,
+                role: user_data.role,
+                stack: user_data.stack,
+                graduate: user_data.graduate,
+                level: user_data.level,
+                department: user_data.department,
+                university: user_data.university,
+                student: user_data.student,
+                user_type: user_data.user_type,
             };
             return Ok(Json(return_user));
         },
@@ -59,38 +79,91 @@ pub async fn profile(user: AuthenticatedUser, db: &State<Collection<User>>) -> R
 }
 
 #[post("/user", format = "json", data = "<user>")]
-pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Result< Json<String> ,rocket::response::status::Custom<String>> {
-    
+pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Result<Json<String>, rocket::response::status::Custom<String>> {
+    // Check if the email already exists
     let filter = doc! {"email": &user.email};
 
     if let Ok(Some(_)) = db.find_one(filter.clone()).await {
-        return Err(rocket::response::status::Custom(Status::Conflict, "User already exist".to_string()));
+        return Err(rocket::response::status::Custom(Status::Conflict, "User already exists".to_string()));
     }
-    
+
+    // Validate user based on type
+    match user.user_type {
+        UserType::CORETEAM => {
+            // Core Team Validation
+            if !user.graduate {
+                return Err(rocket::response::status::Custom(Status::BadRequest, "Core Team members must be graduates.".to_string()));
+            }
+            if user.level != 0 || !user.department.is_empty() || !user.university.is_empty() {
+                return Err(rocket::response::status::Custom(Status::BadRequest, "Core Team members should not have level, department, or university.".to_string()));
+            }
+            if !user.stack.is_empty() {
+                return Err(rocket::response::status::Custom(Status::BadRequest, "Core Team members should not have a stack.".to_string()));
+            }
+        }
+        UserType::HACKER => {
+            // Hacker Validation
+            let valid_roles = vec!["backend", "frontend", "smartcontract dev", "product manager", "UIUX"];
+            if !valid_roles.contains(&user.role.as_str()) {
+                return Err(rocket::response::status::Custom(Status::BadRequest, "Invalid role for hacker.".to_string()));
+            }
+            if user.graduate && (user.level != 0 || !user.department.is_empty() || !user.university.is_empty()) {
+                return Err(rocket::response::status::Custom(Status::BadRequest, "Graduated hackers should not have level, department, or university.".to_string()));
+            }
+            if !user.graduate && (user.level == 0 || user.department.is_empty() || user.university.is_empty()) {
+                return Err(rocket::response::status::Custom(Status::BadRequest, "Non-graduated hackers must have level, department, and university.".to_string()));
+            }
+        }
+        UserType::RANDOM => {
+            // Random User Validation
+            if !user.role.is_empty() || !user.stack.is_empty() {
+                return Err(rocket::response::status::Custom(Status::BadRequest, "Random users should not have role or stack.".to_string()));
+            }
+            if user.graduate && (user.level != 0 || !user.department.is_empty() || !user.university.is_empty()) {
+                return Err(rocket::response::status::Custom(Status::BadRequest, "Graduated random users should not have level, department, or university.".to_string()));
+            }
+        }
+    }
+
+    // Hash the password
     let hashed_password = match hash(&user.password, DEFAULT_COST) {
         Ok(hashed) => hashed,
         Err(_) => return Err(rocket::response::status::Custom(Status::Conflict, "Error hashing password".to_string())),
     };
-    let now= Utc::now();
-    let new_user = User {id:None,name:user.name.clone(),
-        email:user.email.clone(),
-        password:hashed_password,
-        wallet:user.wallet.clone(),
-        admin:user.admin.or(Some(false)), 
+
+    let now = Utc::now();
+
+    // Create new user
+    let new_user = User {
+        id: None,
+        name: user.name.clone(),
+        email: user.email.clone(),
+        tel: user.tel.clone(),
+        password: hashed_password,
+        wallet: user.wallet.clone(),
+        admin: user.admin.or(Some(false)),
+        user_type: user.user_type.clone(),
+        role: user.role.clone(),
+        stack: user.stack.clone(),
+        graduate: user.graduate,
+        level: user.level,
+        department: user.department.clone(),
+        university: user.university.clone(),
+        student: user.student.clone(),
         attending_events: vec![],
-        created_at: now, 
+        created_at: now,
         updated_at: now,
     };
-    
-    // println!("Inserting user: {:?}", new_user);
-    let result = db.insert_one(new_user).await;
 
+    // Insert the new user into the database
+    let result = db.insert_one(new_user).await;
 
     match result {
         Ok(_) => Ok(Json("User registered successfully!".to_string())),
         Err(e) => Err(rocket::response::status::Custom(Status::BadRequest, format!("Error: {e}"))),
     }
 }
+
 
 #[get("/users")]
 pub async fn read_users(db: &State<Collection<User>>,
