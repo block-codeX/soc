@@ -12,7 +12,7 @@ use rocket::http::{HeaderMap, Status};
 use bcrypt::{hash, DEFAULT_COST};
 use serde::{Deserialize, Serialize};
 
-use super::auth::{validate_token, AuthToken};
+use super::auth::{validate_token, AdminUser, AuthToken};
 
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -240,4 +240,24 @@ pub async fn update_user_rank(
     }
 }
 
+#[delete("/users")]
+pub async fn delete_all_users(
+    database: &State<Collection<User>>,  // Assuming you're using a `User` collection
+    _admin: AdminUser, // Only admin can call this
+    _token: AuthToken,  // Verify blacklisted tokens
+    _user: AuthenticatedUser, // Verify authenticated user
+) -> Json<String> {
+    // Delete all users in the collection
+    let result = database.delete_many(doc! {}).await;
 
+    match result {
+        Ok(delete_result) => {
+            if delete_result.deleted_count > 0 {
+                Json("All users successfully deleted.".to_string())
+            } else {
+                Json("No users were found to delete.".to_string())
+            }
+        }
+        Err(_) => Json("Failed to delete users.".to_string()),
+    }
+}

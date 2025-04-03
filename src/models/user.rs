@@ -2,6 +2,12 @@ use chrono::{DateTime, Utc};
 use mongodb::bson::oid::ObjectId;
 use serde::{Deserialize, Serialize};
 
+pub enum UserType {
+    CORETEAM,
+    HACKER,
+    RANDOM
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 // #[serde(rename_all = "camelCase")]
 pub struct User {
@@ -12,6 +18,7 @@ pub struct User {
     pub password: String,
     pub wallet: String,
     pub admin: Option<bool>,
+
     pub attending_events: Vec<ObjectId>,
     #[serde(with = "chrono::serde::ts_seconds", default = "default_datetime")] // Serialize & Deserialize timestamps properly
     pub created_at: DateTime<Utc>,

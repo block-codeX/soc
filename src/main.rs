@@ -66,6 +66,7 @@ async fn rocket() -> _ {
             routes::get_multiple_events,
             routes::update_pinned,
             routes::delete_all_events,
+            routes::delete_all_users,
         ],
     )
 }

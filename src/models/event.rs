@@ -7,9 +7,9 @@ use super::Attendee;
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum EventType {
-    Hackathon,
-    Meetup,
-    Workshop,
+    HACKERTON,
+    MEETUP,
+    WORKSHOP,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

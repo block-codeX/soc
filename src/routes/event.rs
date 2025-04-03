@@ -216,6 +216,14 @@ pub async fn join_event(
         Err(_) => return Err(Status::BadRequest), // Invalid user ID
     };
 
+    // Check if event exists
+    let event = db.find_one(doc! {"_id": event_oid}).await;
+    match event {
+        Ok(Some(_))=>{},
+        Ok(None)=>return Err(Status::NotFound),
+        Err(_) => todo!(),
+    }
+
     // Create the new Attendee object
     let new_attendee = Attendee {
         user_id: user_oid,
@@ -273,7 +281,16 @@ pub async fn leave_event(
     let user_oid = match ObjectId::parse_str(user_id) {
         Ok(oid) => oid,
         Err(_) => return Err(Status::BadRequest), // Invalid user ID
+        
     };
+
+    // Check if event exists
+    let event = db.find_one(doc! {"_id": event_oid}).await;
+    match event {
+        Ok(Some(_))=>{},
+        Ok(None)=>return Err(Status::NotFound),
+        Err(_) => todo!(),
+    }
 
     // Update event by removing the attendee with matching user_id
     let update_doc = doc! {
