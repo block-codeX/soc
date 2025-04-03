@@ -1,6 +1,6 @@
 use crate::models::event::EventType;
-use crate::models::{Attendee, Event};
-use futures::TryStreamExt;
+use crate::models::{Attendee, Event, User};
+use futures::{StreamExt, TryStreamExt};
 use mongodb::Cursor;
 use mongodb::{bson::{doc, oid::{self, ObjectId}}, options::FindOptions, Collection};
 use rocket::{post, serde::json::Json, State};
@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use super::auth::{AdminUser, AuthToken};
 use super::AuthenticatedUser;
 
+const PINNED_EVENT :bool  = false;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserJoinRequest {
     pub user_id: String,  // We'll parse this to ObjectId in the handler
@@ -17,8 +19,18 @@ pub struct UserJoinRequest {
     pub email: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct EventRequest {
+    name: String,
+    location: String,
+    date: String,
+    host_id: Option<ObjectId>,
+    description: String,
+    event_type: EventType
+}
+
 #[post("/event", format="json", data="<new_event>")]
-pub async  fn create_event(new_event: Json<Event>,
+pub async  fn create_event(new_event: Json<EventRequest>,
      Database: &State<Collection<Event>>,
      _admin: AdminUser, // only admin can call this
     _token: AuthToken, // verfiy blacklisted tokens
@@ -34,7 +46,9 @@ pub async  fn create_event(new_event: Json<Event>,
         host_id: new_event.host_id,
         event_type: new_event.event_type.clone(),
         description: new_event.description.clone(),
-        attendees: vec![]
+        attendees: vec![],
+        image_url: Some("".to_string()),
+        pinned: PINNED_EVENT
     };
     let result  = Database.insert_one(new_event).await;
 
@@ -160,6 +174,9 @@ pub async fn join_event(
     event_id: &str,
     user_data: Json<UserJoinRequest>,
     db: &State<Collection<Event>>,
+    user_collection: &State<Collection<User>>,
+    _token: AuthToken, // verfiy blacklisted tokens
+    _user: AuthenticatedUser // verity authenticated user     
 ) -> Result<Json<String>, Status> {
     // Convert event_id and user_id to ObjectId
     let event_oid = match ObjectId::parse_str(event_id) {
@@ -188,11 +205,27 @@ pub async fn join_event(
 
     let filter = doc! {"_id": event_oid};
 
-    match db.find_one_and_update(filter, update_doc).await {
-        Ok(Some(_)) => Ok(Json("Successfully joined the event.".to_string())),
-        Ok(None) => Err(Status::NotFound), // Event not found
-        Err(_) => Err(Status::InternalServerError), // Database error
+    let event_result =  db.find_one_and_update(filter.clone(), update_doc).await;
+
+    if let Err(_) = event_result {
+        return Err(Status::InternalServerError);
     }
+
+    let update_user = doc! {
+        "$addToSet": {"attending_events": event_oid} // ensure no duplicates
+    };
+    let user_filter = doc! {"_id": user_oid};
+
+    let user_result = user_collection.update_one(user_filter.clone(), update_user).await;
+
+    if let Err(_) = user_result {
+        // Rollback changes if failure
+        let rollback_event = doc! {"$pull": { "attendees": user_oid }};
+        let _ = db.update_one(filter, rollback_event).await;
+        return Err(Status::InternalServerError);
+    }
+
+    Ok(Json("Successfully Join the event".to_string()))
 }
 
 #[delete("/event/leave/<event_id>/<user_id>")]
@@ -200,6 +233,9 @@ pub async fn leave_event(
     event_id: &str,
     user_id: &str,
     db: &State<Collection<Event>>,
+    user_collection: &State<Collection<User>>,
+    _token: AuthToken, // verfiy blacklisted tokens
+    _user: AuthenticatedUser // verity authenticated user     
 ) -> Result<Json<String>, Status> {
     // Convert event_id and user_id to ObjectId
     let event_oid = match ObjectId::parse_str(event_id) {
@@ -223,12 +259,58 @@ pub async fn leave_event(
 
     let filter = doc! {"_id": event_oid};
 
-    match db.find_one_and_update(filter, update_doc).await {
-        Ok(Some(_)) => Ok(Json("Successfully left the event.".to_string())),
-        Ok(None) => Err(Status::NotFound), // Event not found
-        Err(e) => {
-            println!("Error leaving event: {:?}", e);
-            Err(Status::InternalServerError) // Database error
+    let event_result = db.find_one_and_update(filter.clone(), update_doc).await;
+    if let Err(_) = event_result {
+        return Err(Status::InternalServerError);
+    }
+
+    let update_user = doc ! {
+        "$pull": {"attending_events": event_oid} // remove event from the user attending list
+    };
+    let user_filter = doc! {"_id": user_oid};
+    let user_result = user_collection.update_one(user_filter.clone(), update_user).await;
+    if let Err(_) = user_result {
+        // rollback event incase of failure
+        let rollback_event = doc! {"$addToSet": {"attendees": user_oid}};
+        let _ = db.update_one(filter, rollback_event).await;
+        return Err(Status::InternalServerError);
+    }
+
+    Ok(Json("Successfully left the event.".to_string()))
+}
+
+#[post("/events/multiple", format = "json", data = "<event_ids>")]
+pub async fn get_multiple_events(
+    event_ids: Json<Vec<String>>, // Accepts a JSON array of event IDs
+    db: &State<Collection<Event>>,
+    _token: AuthToken, // verfiy blacklisted tokens
+    _user: AuthenticatedUser // verity authenticated user     
+) -> Result<Json<Vec<Event>>, Status> {
+    // Convert string IDs to ObjectId
+    let object_ids: Vec<ObjectId> = event_ids
+        .iter()
+        .filter_map(|id| ObjectId::parse_str(id).ok()) // Ignore invalid IDs
+        .collect();
+
+    if object_ids.is_empty() {
+        return Err(Status::BadRequest); // Return error if no valid ObjectIds
+    }
+
+    // Query to find all events where `_id` is in the provided list
+    let filter = doc! { "_id": { "$in": &object_ids } };
+
+    let mut cursor = match db.find(filter).await {
+        Ok(cursor) => cursor,
+        Err(_) => return Err(Status::InternalServerError),
+    };
+
+    let mut events = Vec::new();
+    while let Some(result) = cursor.next().await {
+        match result {
+            Ok(event) => events.push(event),
+            Err(_) => return Err(Status::InternalServerError),
         }
     }
+
+    Ok(Json(events))
 }

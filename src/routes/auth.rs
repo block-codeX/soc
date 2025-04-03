@@ -31,7 +31,7 @@ use crate::db;
 use crate::models::{BlackListedToken, User};
 
 
-const RANK: Option<i32> = Some(1);
+const RANK: Option<bool> = Some(true);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -195,7 +195,7 @@ impl<'r> FromRequest<'r> for AdminUser {
         // Fetch user from MongoDB and check ranking
         let filter = doc! { "email": &email };
         match user_db.find_one(filter).await {
-            Ok(Some(user)) if user.user_rank == RANK => {
+            Ok(Some(user)) if user.admin == RANK => {
                 Outcome::Success(AdminUser { email })
             }
             _ => Outcome::Error((Status::Forbidden, ())), // User is not an admin or does not exist
@@ -263,7 +263,10 @@ pub async fn login(
             }
         }
         Ok(None) => Err(Status::NotFound),
-        Err(_)=> Err(Status::InternalServerError),
+        Err(e)=> {
+            rocket::log::private::warn!("User not found: {}", e);
+            Err(Status::InternalServerError)
+        },
     }
     
 }

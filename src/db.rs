@@ -21,6 +21,7 @@ where
         .expect("failed to connect to mongodb");
 
     let db = client.database("soc");
+    println!("DB connected successfully");
     // Arc::new(db.collection::<T>("users"))
     db.collection(std::any::type_name::<T>().split("::").last().unwrap())
 }

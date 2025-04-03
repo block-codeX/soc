@@ -23,6 +23,7 @@ pub struct Event {
     #[serde(default)]
     pub date: String,
 
+
     pub description: String,
     pub event_type: EventType,
 
@@ -33,4 +34,10 @@ pub struct Event {
 
     #[serde(default)]
     pub attendees: Vec<Attendee>,
+
+    #[serde(skip_serializing_if = "Option::is_none")] // Only include if present
+    pub image_url: Option<String>,
+
+    pub pinned: bool,
+
 }

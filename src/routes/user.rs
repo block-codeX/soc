@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-use chrono::{format, Utc};
+use chrono::{format, DateTime, Utc};
 use mongodb::Collection;
 use rocket::{response::status, serde::json::Json, State};
 use crate::{models::{user, BlackListedToken, User}, routes::auth::AuthenticatedUser};
@@ -10,15 +10,49 @@ use futures::TryStreamExt;
 use mongodb::bson::oid::ObjectId;
 use rocket::http::{HeaderMap, Status};
 use bcrypt::{hash, DEFAULT_COST};
+use serde::{Deserialize, Serialize};
 
 use super::auth::{validate_token, AuthToken};
 
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Profile {
+    id: Option<ObjectId>,
+    pub name: String,
+    pub email: String,
+    pub wallet: String,
+    pub admin: Option<bool>,
+    pub attending_events: Vec<ObjectId>,
+    #[serde(with = "chrono::serde::ts_seconds", default = "default_datetime")] // Serialize & Deserialize timestamps properly
+    pub created_at: DateTime<Utc>,
+    #[serde(with = "chrono::serde::ts_seconds", default = "default_datetime")]
+    pub updated_at: DateTime<Utc>,
+}
+
+fn default_datetime() -> DateTime<Utc> {
+    Utc::now()
+}
+
+
+
 #[get("/profile")]
-pub async fn profile(user: AuthenticatedUser, db: &State<Collection<User>>) -> Result<Json<User>, status::Custom<String>> {
+pub async fn profile(user: AuthenticatedUser, db: &State<Collection<User>>) -> Result<Json<Profile>, status::Custom<String>> {
     let result = db.find_one(doc! {"email": &user.email}).await;
 
     match result {
-        Ok(Some(user_data)) => Ok(Json(user_data)),
+        Ok(Some(user_data)) => {
+            let return_user = Profile {
+                id: user_data.id,
+                name: user_data.name,
+                email: user_data.email,
+                wallet: user_data.wallet,
+                admin: user_data.admin,
+                attending_events: user_data.attending_events,
+                created_at: user_data.created_at,
+                updated_at: user_data.updated_at
+            };
+            return Ok(Json(return_user));
+        },
         Ok(None) => Err(status::Custom(Status::NotFound, "User not found".to_string())), // if no user found
         Err(e) => Err(status::Custom(Status::InternalServerError, format!("Database error: {}", e)))
     }
@@ -42,7 +76,8 @@ pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Result< 
         email:user.email.clone(),
         password:hashed_password,
         wallet:user.wallet.clone(),
-        user_rank:user.user_rank.or(Some(0)), 
+        admin:user.admin.or(Some(false)), 
+        attending_events: vec![],
         created_at: now, 
         updated_at: now,
     };
@@ -150,8 +185,8 @@ pub async fn update_user(
     
     };
     // only add user ranking if it is provided
-    if let Some(rank) = updated_user.user_rank {
-        update_doc.insert("user_rank", Bson::Int32(rank));
+    if let Some(rank) = updated_user.admin {
+        update_doc.insert("user_rank", Bson::Boolean(rank));
     }
     
     let updated_doc = doc! {  "$set": Bson::Document(update_doc)};
@@ -174,10 +209,10 @@ pub async fn update_user(
 }
 
 
-#[put("/user/<id>/rank", format = "json", data = "<new_rank>")]
+#[put("/user/<id>/admin", format = "json", data = "<admin>")]
 pub async fn update_user_rank(
     id: &str,
-    new_rank: Json<i32>,
+    admin: Json<bool>,
     db: &State<Collection<User>>,
     _token: AuthToken,
     _user: AuthenticatedUser,
@@ -190,7 +225,7 @@ pub async fn update_user_rank(
     };
 
     let filter = doc! {"_id": object_id};
-    let update = doc! {"$set": {"user_rank": Bson::Int32(*new_rank)}};
+    let update = doc! {"$set": {"admin": Bson::Boolean(*admin)}};
 
     match collection.find_one_and_update(filter, update).await {
         Ok(Some(_)) => Ok(Json("User rank successfully updated".to_string())),

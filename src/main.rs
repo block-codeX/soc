@@ -63,6 +63,7 @@ async fn rocket() -> _ {
             routes::profile,
             routes::join_event,
             routes::leave_event,
+            routes::get_multiple_events,
         ],
     )
 }
