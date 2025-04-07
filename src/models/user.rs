@@ -45,6 +45,6 @@ pub struct User {
     pub updated_at: DateTime<Utc>,
 }
 
-fn default_datetime() -> DateTime<Utc> {
+pub fn default_datetime() -> DateTime<Utc> {
     Utc::now()
 }

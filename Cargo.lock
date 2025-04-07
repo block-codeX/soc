@@ -268,6 +268,7 @@ dependencies = [
  "ahash",
  "base64 0.22.1",
  "bitvec",
+ "chrono",
  "getrandom 0.2.15",
  "getrandom 0.3.1",
  "hex",
@@ -2467,6 +2468,7 @@ version = "0.1.0"
 dependencies = [
  "actix",
  "bcrypt",
+ "bson",
  "chrono",
  "dotenv",
  "futures",

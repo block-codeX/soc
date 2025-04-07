@@ -1,5 +1,6 @@
-use mongodb::bson::oid::ObjectId;
+use mongodb::bson::{oid::ObjectId};
 use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Utc};
 
 use super::Attendee;
 
@@ -21,7 +22,7 @@ pub struct Event {
     #[serde(default)] // if location is missing use default value
     pub location: String,
     #[serde(default)]
-    pub date: String,
+    pub date: DateTime<Utc>,
 
 
     pub description: String,
@@ -40,4 +41,8 @@ pub struct Event {
 
     pub pinned: bool,
 
+}
+
+pub fn default_datetime() -> DateTime<Utc> {
+    Utc::now()
 }

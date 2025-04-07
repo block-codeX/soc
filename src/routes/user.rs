@@ -44,6 +44,33 @@ fn default_datetime() -> DateTime<Utc> {
     Utc::now()
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+// #[serde(rename_all = "camelCase")]
+pub struct SignUPDto {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub name: String,
+    pub email: String,
+    pub tel: String,
+    pub password: String,
+    pub wallet: String,
+    pub admin: Option<bool>,
+    pub user_type: UserType,
+    pub role: String,
+    pub stack: Vec<String>,
+    pub graduate: bool,
+    pub level: i32,
+    pub department: String,
+    pub university: String,
+    pub student: String,
+
+    pub attending_events: Vec<ObjectId>,
+    #[serde(with = "chrono::serde::ts_seconds", default = "default_datetime")] // Serialize & Deserialize timestamps properly
+    pub created_at: DateTime<Utc>,
+    #[serde(with = "chrono::serde::ts_seconds", default = "default_datetime")]
+    pub updated_at: DateTime<Utc>,
+}
+
 
 
 #[get("/profile")]
@@ -79,7 +106,7 @@ pub async fn profile(user: AuthenticatedUser, db: &State<Collection<User>>) -> R
 }
 
 #[post("/user", format = "json", data = "<user>")]
-pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Result<Json<String>, rocket::response::status::Custom<String>> {
+pub async fn sign_up(mut user: Json<SignUPDto>, db: &State<Collection<User>>) -> Result<Json<String>, rocket::response::status::Custom<String>> {
     // Check if the email already exists
     let filter = doc! {"email": &user.email};
 
@@ -91,9 +118,7 @@ pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Result<J
     match user.user_type {
         UserType::CORETEAM => {
             // Core Team Validation
-            if !user.graduate {
-                return Err(rocket::response::status::Custom(Status::BadRequest, "Core Team members must be graduates.".to_string()));
-            }
+            user.graduate = true;
             if user.level != 0 || !user.department.is_empty() || !user.university.is_empty() {
                 return Err(rocket::response::status::Custom(Status::BadRequest, "Core Team members should not have level, department, or university.".to_string()));
             }
@@ -141,7 +166,7 @@ pub async fn sign_up(user: Json<User>, db: &State<Collection<User>>) -> Result<J
         tel: user.tel.clone(),
         password: hashed_password,
         wallet: user.wallet.clone(),
-        admin: user.admin.or(Some(false)),
+        admin: Some(false),
         user_type: user.user_type.clone(),
         role: user.role.clone(),
         stack: user.stack.clone(),

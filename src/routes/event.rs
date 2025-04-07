@@ -2,10 +2,12 @@ use std::sync::Arc;
 
 use crate::models::event::EventType;
 use crate::models::{Attendee, Event, User};
+use chrono::{format, DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
+use mongodb::bson::{doc, DateTime as BsonDateTime};
 use mongodb::change_stream::{event, session};
 use mongodb::{Client, Cursor};
-use mongodb::{bson::{doc, oid::{self, ObjectId}}, options::FindOptions, Collection};
+use mongodb::{bson::{ oid::{self, ObjectId}}, options::FindOptions, Collection};
 use rocket::{post, serde::json::Json, State};
 use rocket::http::Status;
 use serde::{Deserialize, Serialize};
@@ -63,7 +65,7 @@ pub async fn create_event(
                 id: None,
                 name: new_event.name.clone(),
                 location: new_event.location.clone(),
-                date: new_event.date.clone(),
+                date: Utc::now(),
                 host_id: new_event.host_id,
                 event_type: new_event.event_type.clone(),
                 description: new_event.description.clone(),
@@ -148,7 +150,6 @@ pub async fn update_event(
         "$set" : {
             "name": &updated_event.name,
         "location": &updated_event.location,
-        "date": &updated_event.date,
         }
     };
     
@@ -479,4 +480,31 @@ pub async fn delete_all_events(
         }
         Err(_) => Json("Failed to delete events.".to_string()),
     }
+}
+
+#[get("/events/upcoming")]
+pub async fn read_upcoming_events(
+    Database: &State<Collection<Event>>,
+    // _token: AuthToken,
+    // _user: AuthenticatedUser,
+) -> Json<Vec<Event>> {
+    let now_chrono = Utc::now();
+    let now_bson = BsonDateTime::from_system_time(now_chrono.into());
+
+
+    let filter = doc! {
+        "date": { "$gte": now_bson }
+    };
+
+    let mut cursor = Database
+        .find(filter)
+        .await
+        .expect("Failed to fetch upcoming events");
+
+    let mut events: Vec<Event> = Vec::new();
+    while let Some(event) = cursor.try_next().await.expect("Cursor error") {
+        events.push(event);
+    }
+
+    Json(events)
 }
